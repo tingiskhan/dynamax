@@ -436,7 +436,9 @@ def lgssm_joint_sample(
 def lgssm_filter(
     params: ParamsLGSSM,
     emissions:  Float[Array, "ntime emission_dim"],
-    inputs: Optional[Float[Array, "ntime input_dim"]]=None
+    inputs: Optional[Float[Array, "ntime input_dim"]]=None,
+    *,
+    allow_missing: bool = False,
 ) -> PosteriorGSSMFiltered:
     r"""Run a Kalman filter to produce the marginal likelihood and filtered state estimates.
 
@@ -444,6 +446,7 @@ def lgssm_filter(
         params: model parameters
         emissions: array of observations.
         inputs: optional array of inputs.
+        allow_missing: whether to allow missing observations by filling with filter prediction.
 
     Returns:
         PosteriorGSSMFiltered: filtered posterior object
@@ -452,8 +455,7 @@ def lgssm_filter(
     num_timesteps = len(emissions)
     inputs = jnp.zeros((num_timesteps, 0)) if inputs is None else inputs
 
-    def _log_likelihood(pred_mean, pred_cov, H, D, d, R, u, y):
-        m = H @ pred_mean + D @ u + d
+    def _log_likelihood(m, pred_cov, H, R, y):
         if R.ndim==2:
             S = R + H @ pred_cov @ H.T
             return MVN(m, S).log_prob(y)
@@ -470,8 +472,14 @@ def lgssm_filter(
         u = inputs[t]
         y = emissions[t]
 
+        y_pred = H @ pred_mean + D @ u + d
+
+        if allow_missing:
+            not_missing = jnp.isfinite(y)
+            y = jnp.where(not_missing, y, y_pred)
+
         # Update the log likelihood
-        ll += _log_likelihood(pred_mean, pred_cov, H, D, d, R, u, y)
+        ll += _log_likelihood(y_pred, pred_cov, H, R, y)
 
         # Condition on this emission
         filtered_mean, filtered_cov = _condition_on(pred_mean, pred_cov, H, D, d, R, u, y)

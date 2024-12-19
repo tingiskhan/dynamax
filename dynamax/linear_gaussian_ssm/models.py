@@ -221,9 +221,11 @@ class LinearGaussianSSM(SSM):
         self,
         params: ParamsLGSSM,
         emissions: Float[Array, "ntime emission_dim"],
-        inputs: Optional[Float[Array, "ntime input_dim"]] = None
+        inputs: Optional[Float[Array, "ntime input_dim"]] = None,
+        *,
+        allow_missing: bool = False,
     ) -> PosteriorGSSMFiltered:
-        return lgssm_filter(params, emissions, inputs)
+        return lgssm_filter(params, emissions, inputs, allow_missing=allow_missing)
 
     def smoother(
         self,
