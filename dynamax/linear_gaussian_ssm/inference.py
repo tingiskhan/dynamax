@@ -1,3 +1,4 @@
+import jax.lax
 import jax.numpy as jnp
 import jax.random as jr
 from jax import lax
@@ -437,8 +438,6 @@ def lgssm_filter(
     params: ParamsLGSSM,
     emissions:  Float[Array, "ntime emission_dim"],
     inputs: Optional[Float[Array, "ntime input_dim"]]=None,
-    *,
-    allow_missing: bool = False,
 ) -> PosteriorGSSMFiltered:
     r"""Run a Kalman filter to produce the marginal likelihood and filtered state estimates.
 
@@ -455,13 +454,20 @@ def lgssm_filter(
     num_timesteps = len(emissions)
     inputs = jnp.zeros((num_timesteps, 0)) if inputs is None else inputs
 
-    def _log_likelihood(m, pred_cov, H, R, y):
+    def _log_likelihood(m, pred_cov, H, R, y, cov_diag):
         if R.ndim==2:
             S = R + H @ pred_cov @ H.T
             return MVN(m, S).log_prob(y)
         else:
             L = H @ jnp.linalg.cholesky(pred_cov)
             return MVNLowRank(m, R, L).log_prob(y)
+
+
+    def _fill_missing(mask, y, y_pred):
+        y_filled = jnp.where(mask, y, y_pred)
+        cov_offset = 1e4 * jnp.eye(y.shape[-1])
+
+        return y_filled, cov_offset
 
 
     def _step(carry, t):
@@ -473,13 +479,17 @@ def lgssm_filter(
         y = emissions[t]
 
         y_pred = H @ pred_mean + D @ u + d
+        mask = jnp.isfinite(y)
 
-        if allow_missing:
-            not_missing = jnp.isfinite(y)
-            y = jnp.where(not_missing, y, y_pred)
+        # TODO: separate between fully missing and partially missing
+        y, cov_diag = jax.lax.cond(
+            ~mask.all(),
+            lambda: _fill_missing(mask, y, y_pred),
+            lambda: (y, 0.0 * jnp.eye(y.shape[-1])),
+        )
 
         # Update the log likelihood
-        ll += _log_likelihood(y_pred, pred_cov, H, R, y)
+        ll += _log_likelihood(y_pred, pred_cov, H, R, y, cov_diag)
 
         # Condition on this emission
         filtered_mean, filtered_cov = _condition_on(pred_mean, pred_cov, H, D, d, R, u, y)
