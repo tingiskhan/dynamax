@@ -178,6 +178,7 @@ def build_lgssm_for_sampling():
     return lgssm, params
 
 
+# TODO: split into separate tests
 class TestFilteringAndSmoothing():
 
     ## For inference tests
@@ -249,4 +250,30 @@ class TestFilteringAndSmoothing():
         assert allclose(jnp.std(self.samples), jnp.std(self.tfp_samples))
         assert allclose(jnp.mean(self.samples_diag), jnp.mean(self.tfp_samples))
         assert allclose(jnp.std(self.samples_diag), jnp.std(self.tfp_samples))
-        
+
+
+# TODO: parameterize original test instead?
+def test_missing_observations():
+    lgssm, params = build_lgssm_for_inference()
+
+    # Sample data and compute dynamax posteriors
+    sample_key = jr.PRNGKey(0)
+    num_timesteps = 15
+    _, emissions = lgssm.sample(params, sample_key, num_timesteps)
+
+    # setup TFP
+    tfp_lgssm = lgssm_dynamax_to_tfp(num_timesteps, params)
+    tfp_lls, tfp_filtered_means, tfp_filtered_covs, *_ = tfp_lgssm.forward_filter(emissions)
+    tfp_smoothed_means, tfp_smoothed_covs = tfp_lgssm.posterior_marginals(emissions)
+
+    # smooth dynamax
+    # NB: since TFP doesn't support missing elements we do a proxy test by verifying that the filterd variables are
+    # somewhat close
+    emissions = emissions.at[10, 2].set(jnp.nan)
+    ssm_posterior = lgssm.smoother(params, emissions)
+
+    assert allclose(ssm_posterior.filtered_means, tfp_filtered_means)
+    assert allclose(ssm_posterior.filtered_covariances, tfp_filtered_covs)
+    assert allclose(ssm_posterior.smoothed_means, tfp_smoothed_means)
+    assert allclose(ssm_posterior.smoothed_covariances, tfp_smoothed_covs)
+    assert allclose(ssm_posterior.marginal_loglik, tfp_lls.sum())

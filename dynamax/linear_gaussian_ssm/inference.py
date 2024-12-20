@@ -455,17 +455,17 @@ def lgssm_filter(
     inputs = jnp.zeros((num_timesteps, 0)) if inputs is None else inputs
 
     def _log_likelihood(m, pred_cov, H, R, y, cov_diag):
-        if R.ndim==2:
-            S = R + H @ pred_cov @ H.T
+        if R.ndim == 2:
+            S = R + H @ pred_cov @ H.T + jnp.diag(cov_diag)
             return MVN(m, S).log_prob(y)
         else:
             L = H @ jnp.linalg.cholesky(pred_cov)
-            return MVNLowRank(m, R, L).log_prob(y)
+            return MVNLowRank(m, R + cov_diag, L).log_prob(y)
 
 
-    def _fill_missing(mask, y, y_pred):
-        y_filled = jnp.where(mask, y, y_pred)
-        cov_offset = 1e4 * jnp.eye(y.shape[-1])
+    def _fill_missing(is_not_finite, y, y_pred):
+        y_filled = jnp.where(is_not_finite, y_pred, y)
+        cov_offset = jnp.where(is_not_finite, 1e4, 0.0)
 
         return y_filled, cov_offset
 
@@ -479,13 +479,13 @@ def lgssm_filter(
         y = emissions[t]
 
         y_pred = H @ pred_mean + D @ u + d
-        mask = jnp.isfinite(y)
+        is_not_finite = ~jnp.isfinite(y)
 
         # TODO: separate between fully missing and partially missing
         y, cov_diag = jax.lax.cond(
-            ~mask.all(),
-            lambda: _fill_missing(mask, y, y_pred),
-            lambda: (y, 0.0 * jnp.eye(y.shape[-1])),
+            is_not_finite.any(),
+            lambda: _fill_missing(is_not_finite, y, y_pred),
+            lambda: (y, jnp.zeros_like(y)),
         )
 
         # Update the log likelihood
